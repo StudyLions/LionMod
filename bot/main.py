@@ -2,6 +2,7 @@ import asyncio
 import discord
 import datetime
 from cmdClient.cmdClient import cmdClient
+from cmdClient.lib import SafeCancellation
 
 from config import Conf
 from logger import log
@@ -34,17 +35,79 @@ def is_moderator(ctx):
 
 
 # ----------------------------------------------------------------------------
-# Commands
+# Admin Commands
+# ----------------------------------------------------------------------------
+@client.cmd("auth", flags=('add', 'remove'))
+async def cmd_auth(ctx, flags):
+    if ctx.author.id not in owners:
+        raise SafeCancellation
+
+    global moderators
+    if not (flags['add'] or flags['remove']):
+        mod_list = ', '.join('<@{}>'.format(moderator) for moderator in moderators)
+        embed = discord.Embed(
+            title="Authorised network moderators",
+            description=(
+                "{mod_list}\n\n"
+                "Add moderators with `{prefix}auth --add userid, userid, ...`\n"
+                "Remove with `{prefix}auth --remove userid, userid, ...`"
+            ).format(
+                mod_list=mod_list or "None",
+                prefix=prefix
+            )
+        )
+        await ctx.reply(embed=embed)
+    else:
+        # Parse the provided users
+        splits = (userid.strip('<@&!> ') for userid in ctx.args.split(','))
+        splits = [split for split in splits if split]
+        if not splits or not all(split.isdigit() for split in splits):
+            await ctx.error_reply(
+                "**Usage:** `{}auth --{} userid, userid, ...`".format(
+                    prefix,
+                    'add' if flags['add'] else 'remove'
+                )
+            )
+        elif flags['add']:
+            userids = set(int(split) for split in splits)
+            moderators = moderators.union(userids)
+            conf.bot['moderators'] = ', '.join(str(modid) for modid in moderators)
+            conf.write()
+            embed = discord.Embed(
+                title="New users authorised",
+                description=(
+                    "The following users were authorised as network moderators.\n{}"
+                ).format(', '.join("<@{}>".format(modid) for modid in userids)),
+                colour=discord.Colour.green()
+            )
+            await ctx.reply(embed=embed)
+        elif flags['remove']:
+            userids = set(int(split) for split in splits)
+            moderators = moderators.difference(userids)
+            conf.bot['moderators'] = ', '.join(str(modid) for modid in moderators)
+            conf.write()
+            embed = discord.Embed(
+                title="Users deauthorised",
+                description=(
+                    "The following users are no longer network moderators.\n{}"
+                ).format(', '.join('<@{}>'.format(modid) for modid in userids)),
+                colour=discord.Colour.green()
+            )
+            await ctx.reply(embed=embed)
+
+
+# ----------------------------------------------------------------------------
+# Moderator Commands
 # ----------------------------------------------------------------------------
 @client.cmd("networkban",
             aliases=('nban', 'gban'))
 async def cmd_networkban(ctx):
     # Ignore if the user isn't a permitted moderator
     if not is_moderator(ctx):
-        return
+        raise SafeCancellation
 
     # Parse the provided users
-    splits = (userid.strip('<@> ') for userid in ctx.args.split(','))
+    splits = (userid.strip('<@&!> ') for userid in ctx.args.split(','))
     splits = [split for split in splits if split]
 
     if not splits or not all(split.isdigit() for split in splits):
